@@ -98,6 +98,7 @@ export const defaultJobConfig: JobConfig = {
           diff_output_preservation_class: 'person',
           switch_boundary_every: 1,
           loss_type: 'mse',
+          use_accelerate_ddp: false,
         },
         logging: {
           log_every: 1,

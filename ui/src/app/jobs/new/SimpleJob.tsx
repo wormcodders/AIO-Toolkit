@@ -642,6 +642,13 @@ export default function SimpleJob({
                   min={1}
                   required
                 />
+                <FormGroup label="Multi-GPU" className="pt-2">
+                  <Checkbox
+                    label="Enable DDP via Accelerate"
+                    checked={jobConfig.config.process[0].train.use_accelerate_ddp || false}
+                    onChange={value => setJobConfig(value, 'config.process[0].train.use_accelerate_ddp')}
+                  />
+                </FormGroup>
               </div>
               <div>
                 <SelectInput

@@ -151,6 +151,7 @@ export interface TrainConfig {
   differential_guidance_scale?: number;
   audio_loss_multiplier?: number;
   max_loss?: number | null;
+  use_accelerate_ddp?: boolean;
 }
 
 export interface QuantizeKwargsConfig {

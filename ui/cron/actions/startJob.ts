@@ -81,8 +81,15 @@ const startAndWatchJob = (job: Job) => {
       additionalEnv.HF_TOKEN = hfToken;
     }
 
+    const useAccelerateDDP = jobConfig.config.process[0].train?.use_accelerate_ddp === true;
+
     // Add the --log argument to the command
-    const args = [runFilePath, configPath, '--log', logPath];
+    let args: string[];
+    if (useAccelerateDDP) {
+      args = ['-m', 'accelerate.commands.launch', '--num_processes=2', runFilePath, configPath, '--log', logPath];
+    } else {
+      args = [runFilePath, configPath, '--log', logPath];
+    }
 
     try {
       let subprocess;
