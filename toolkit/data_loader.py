@@ -703,7 +703,8 @@ def get_dataloader_from_datasets(
 
     dataloader_kwargs = {}
     
-    if is_native_windows() or is_macos():
+    import os
+    if is_native_windows() or is_macos() or os.environ.get("AITK_DELAY_DDP", "0") == "1":
         dataloader_kwargs['num_workers'] = 0
     else:
         dataloader_kwargs['num_workers'] = dataset_config_list[0].num_workers
