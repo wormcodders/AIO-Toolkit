@@ -82,6 +82,7 @@ const startAndWatchJob = (job: Job) => {
 
     const additionalEnv: any = {
       AITK_JOB_ID: jobID,
+      AITK_DELAY_DDP: useAccelerateDDP ? '1' : '0',
       CUDA_DEVICE_ORDER: 'PCI_BUS_ID',
       CUDA_VISIBLE_DEVICES: useAccelerateDDP ? '0,1' : `${job.gpu_ids}`,
       IS_AI_TOOLKIT_UI: '1',

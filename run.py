@@ -104,6 +104,10 @@ def main():
 
     if accelerator.is_main_process:
         print_acc(f"Running {len(config_file_list)} job{'' if len(config_file_list) == 1 else 's'}")
+    elif os.environ.get("AITK_DELAY_DDP", "0") == "1":
+        import time
+        print(f"Delaying DDP initialization on process {accelerator.process_index} by 3 minutes to save System RAM...")
+        time.sleep(180)
 
     for config_file in config_file_list:
         try:
