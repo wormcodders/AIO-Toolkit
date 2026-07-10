@@ -167,9 +167,9 @@ class MemoryManager:
         for unmanaged in module._memory_manager.unmanaged_modules:
             try:
                 if isinstance(unmanaged, torch.nn.Parameter):
-                    unmanaged.data = unmanaged.data.to('cpu')
+                    unmanaged.data = unmanaged.data.to('meta')
                 else:
-                    unmanaged.to('cpu')
+                    unmanaged.to('meta')
             except Exception:
                 pass
 

@@ -37,8 +37,8 @@ class FakeTextEncoder(torch.nn.Module):
 
 def _detach_and_cpu(te: torch.nn.Module):
     MemoryManager.detach(te)
-    # bypass any nopped-out .to() override and force an actual CPU move
-    torch.nn.Module.to(te, 'cpu')
+    # Move to 'meta' device instead of 'cpu' to instantly free VRAM without spiking System RAM
+    torch.nn.Module.to(te, 'meta')
 
 
 def unload_text_encoder(model: "BaseModel"):
