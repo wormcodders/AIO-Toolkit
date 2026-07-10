@@ -50,6 +50,18 @@ const startAndWatchJob = (job: Job) => {
     const jobConfig = JSON.parse(job.job_config);
     jobConfig.config.process[0].sqlite_db_path = path.join(TOOLKIT_ROOT, 'aitk_db.db');
 
+    const useAccelerateDDP = jobConfig.config.process[0].train?.use_accelerate_ddp === true;
+
+    // Enforce safe device allocation for DDP
+    if (useAccelerateDDP) {
+      if (jobConfig.config.process[0].model.te_device === 'cuda:1') {
+        delete jobConfig.config.process[0].model.te_device;
+      }
+      if (jobConfig.config.process[0].model.vae_device === 'cuda:1') {
+        delete jobConfig.config.process[0].model.vae_device;
+      }
+    }
+
     // write the config file
     fs.writeFileSync(configPath, JSON.stringify(jobConfig, null, 2));
 
@@ -71,7 +83,7 @@ const startAndWatchJob = (job: Job) => {
     const additionalEnv: any = {
       AITK_JOB_ID: jobID,
       CUDA_DEVICE_ORDER: 'PCI_BUS_ID',
-      CUDA_VISIBLE_DEVICES: `${job.gpu_ids}`,
+      CUDA_VISIBLE_DEVICES: useAccelerateDDP ? '0,1' : `${job.gpu_ids}`,
       IS_AI_TOOLKIT_UI: '1',
     };
 
@@ -81,12 +93,10 @@ const startAndWatchJob = (job: Job) => {
       additionalEnv.HF_TOKEN = hfToken;
     }
 
-    const useAccelerateDDP = jobConfig.config.process[0].train?.use_accelerate_ddp === true;
-
     // Add the --log argument to the command
     let args: string[];
     if (useAccelerateDDP) {
-      args = ['-m', 'accelerate.commands.launch', '--num_processes=2', runFilePath, configPath, '--log', logPath];
+      args = ['-m', 'accelerate.commands.launch', '--multi_gpu', '--num_processes=2', runFilePath, configPath, '--log', logPath];
     } else {
       args = [runFilePath, configPath, '--log', logPath];
     }
