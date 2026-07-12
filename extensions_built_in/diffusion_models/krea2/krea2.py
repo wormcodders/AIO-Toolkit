@@ -351,7 +351,10 @@ class Krea2Model(BaseModel):
         network._update_torch_multiplier()
         network.load_weights(lora_state_dict)
 
-        network.merge_in(merge_weight=1.0)
+        # Do NOT merge it here if quantizing! Merging memory-mapped tensors causes a 26.3GB copy-on-write RAM spike!
+        # We merge it mathematically block-by-block during quantization instead.
+        if not self.model_config.quantize:
+            network.merge_in(merge_weight=1.0)
 
         # mark it as not merged so inference ignores it.
         network.is_merged_in = False
@@ -380,14 +383,59 @@ class Krea2Model(BaseModel):
                 self.model_config.qtype = "float8"
 
         if self.model_config.quantize:
-            self.print_and_status_update("Quantizing transformer")
-            # Detach Assistant LoRA so dirty fp16 weights can be garbage collected during quantization
+            self.print_and_status_update("Quantizing transformer with on-the-fly Assistant LoRA merging")
+            from toolkit.util.quantize import get_qtype
+            from optimum.quanto import quantize, freeze
+            import gc
+            import torch
+            
+            qtype = get_qtype(self.model_config.qtype)
+            
+            # Step 1: Prepare for on-the-fly merge
+            lora_map = {}
             if getattr(self, 'assistant_lora', None) is not None:
-                for lora in self.assistant_lora.unet_loras:
-                    lora.org_module = []
+                lora_map = {lora.org_module[0]: lora for lora in self.assistant_lora.unet_loras}
             
+            # Step 2: Iterate blocks, merge, and quantize
+            all_blocks = []
+            for name in self.get_transformer_block_names():
+                block_list = transformer
+                for part in name.split('.'):
+                    block_list = getattr(block_list, part, None)
+                    if block_list is None:
+                        break
+                if block_list is not None:
+                    all_blocks += list(block_list)
+                    
+            from tqdm import tqdm
+            for block in tqdm(all_blocks, desc="Merging & Quantizing blocks"):
+                # Apply LoRA delta for this block only
+                for om in block.modules():
+                    if om in lora_map:
+                        lora = lora_map[om]
+                        delta = lora.get_weight_multiplier()
+                        # Allocate new tensor in RAM instead of in-place mutation to avoid copy-on-write dirty pages
+                        om.weight = torch.nn.Parameter(om.weight.data + delta.to(om.weight.device, dtype=om.weight.dtype))
+                        # Detach to allow GC
+                        lora.org_module = []
+                        lora.org_forward = None
+                        del lora_map[om]
+                
+                # Quantize the block, which deletes the temporary fp16 tensors
+                quantize(block, weights=qtype)
+                freeze(block)
+                gc.collect()
+            
+            # Step 3: Handle any remaining linears (e.g. proj_in, proj_out) outside the main blocks
+            for om, lora in lora_map.items():
+                delta = lora.get_weight_multiplier()
+                om.weight = torch.nn.Parameter(om.weight.data + delta.to(om.weight.device, dtype=om.weight.dtype))
+                lora.org_module = []
+                lora.org_forward = None
+            
+            # Call toolkit's quantize_model to finish the job
             quantize_model(self, transformer)
-            
+            flush()
             # Reattach Assistant LoRA to the new QLinear modules
             if getattr(self, 'assistant_lora', None) is not None:
                 for lora in self.assistant_lora.unet_loras:
