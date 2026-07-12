@@ -237,9 +237,6 @@ class Krea2Model(BaseModel):
             self.model_config.name_or_path,
             self.model_config.model_kwargs.get("checkpoint_filename", None),
         )
-        for k in list(state_dict.keys()):
-            if state_dict[k].is_floating_point():
-                state_dict[k] = state_dict[k].to(dtype)
         self.print_and_status_update("  - loading transformer state dict")
         transformer.load_state_dict(state_dict, strict=True, assign=True)
         del state_dict
