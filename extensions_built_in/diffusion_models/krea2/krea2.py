@@ -391,12 +391,14 @@ class Krea2Model(BaseModel):
             
             qtype = get_qtype(self.model_config.qtype)
             
-            # Step 1: Prepare for on-the-fly merge
+            # Step 1: Build a map from original module -> LoRA module for the assistant adapter
             lora_map = {}
             if getattr(self, 'assistant_lora', None) is not None:
-                lora_map = {lora.org_module[0]: lora for lora in self.assistant_lora.unet_loras}
+                for lora in self.assistant_lora.unet_loras:
+                    if lora.org_module:
+                        lora_map[id(lora.org_module[0])] = lora
             
-            # Step 2: Iterate blocks, merge, and quantize
+            # Step 2: Iterate blocks, merge LoRA delta, then quantize
             all_blocks = []
             for name in self.get_transformer_block_names():
                 block_list = transformer
@@ -409,31 +411,28 @@ class Krea2Model(BaseModel):
                     
             from tqdm import tqdm
             for block in tqdm(all_blocks, desc="Merging & Quantizing blocks"):
-                # Apply LoRA delta for this block only
+                # Merge LoRA delta into each targeted linear in this block
                 for om in block.modules():
-                    if om in lora_map:
-                        lora = lora_map[om]
-                        delta = lora.get_weight_multiplier()
-                        # Allocate new tensor in RAM instead of in-place mutation to avoid copy-on-write dirty pages
-                        om.weight = torch.nn.Parameter(om.weight.data + delta.to(om.weight.device, dtype=om.weight.dtype))
-                        # Detach to allow GC
+                    if id(om) in lora_map:
+                        lora = lora_map.pop(id(om))
+                        # Use the existing merge_in which computes (up @ down) * scale
+                        lora.merge_in(merge_weight=1.0)
+                        # Now detach references so GC can reclaim the dirty copy-on-write pages
                         lora.org_module = []
                         lora.org_forward = None
-                        del lora_map[om]
                 
-                # Quantize the block, which deletes the temporary fp16 tensors
+                # Quantize the block (replaces large fp16 weights with compact int8)
                 quantize(block, weights=qtype)
                 freeze(block)
                 gc.collect()
             
-            # Step 3: Handle any remaining linears (e.g. proj_in, proj_out) outside the main blocks
-            for om, lora in lora_map.items():
-                delta = lora.get_weight_multiplier()
-                om.weight = torch.nn.Parameter(om.weight.data + delta.to(om.weight.device, dtype=om.weight.dtype))
+            # Step 3: Handle any remaining LoRA modules outside the main blocks
+            for lora in lora_map.values():
+                lora.merge_in(merge_weight=1.0)
                 lora.org_module = []
                 lora.org_forward = None
             
-            # Call toolkit's quantize_model to finish the job
+            # Call toolkit's quantize_model to finish the rest (additional layers, etc.)
             quantize_model(self, transformer)
             flush()
             # Reattach Assistant LoRA to the new QLinear modules
