@@ -383,56 +383,51 @@ class Krea2Model(BaseModel):
                 self.model_config.qtype = "float8"
 
         if self.model_config.quantize:
-            self.print_and_status_update("Quantizing transformer with on-the-fly Assistant LoRA merging")
-            from toolkit.util.quantize import get_qtype
-            from optimum.quanto import quantize, freeze
             import gc
-            import torch
             
-            qtype = get_qtype(self.model_config.qtype)
-            
-            # Step 1: Build a map from original module -> LoRA module for the assistant adapter
-            lora_map = {}
+            # Step 1: Merge assistant LoRA into each block one at a time to avoid
+            # a 26.3GB copy-on-write RAM spike from modifying memory-mapped weights all at once.
             if getattr(self, 'assistant_lora', None) is not None:
+                self.print_and_status_update("Merging assistant LoRA block-by-block to save RAM")
+                
+                # Build a map: id(original_module) -> LoRA module
+                lora_map = {}
                 for lora in self.assistant_lora.unet_loras:
                     if lora.org_module:
                         lora_map[id(lora.org_module[0])] = lora
-            
-            # Step 2: Iterate blocks, merge LoRA delta, then quantize
-            all_blocks = []
-            for name in self.get_transformer_block_names():
-                block_list = transformer
-                for part in name.split('.'):
-                    block_list = getattr(block_list, part, None)
-                    if block_list is None:
-                        break
-                if block_list is not None:
-                    all_blocks += list(block_list)
-                    
-            from tqdm import tqdm
-            for block in tqdm(all_blocks, desc="Merging & Quantizing blocks"):
-                # Merge LoRA delta into each targeted linear in this block
-                for om in block.modules():
-                    if id(om) in lora_map:
-                        lora = lora_map.pop(id(om))
-                        # Use the existing merge_in which computes (up @ down) * scale
-                        lora.merge_in(merge_weight=1.0)
-                        # Now detach references so GC can reclaim the dirty copy-on-write pages
-                        lora.org_module = []
-                        lora.org_forward = None
                 
-                # Quantize the block (replaces large fp16 weights with compact int8)
-                quantize(block, weights=qtype)
-                freeze(block)
+                # Walk through transformer blocks and merge only the LoRAs in each block
+                all_blocks = []
+                for name in self.get_transformer_block_names():
+                    block_list = transformer
+                    for part in name.split('.'):
+                        block_list = getattr(block_list, part, None)
+                        if block_list is None:
+                            break
+                    if block_list is not None:
+                        all_blocks += list(block_list)
+                
+                from tqdm import tqdm
+                for block in tqdm(all_blocks, desc="Merging LoRA into blocks"):
+                    for om in block.modules():
+                        if id(om) in lora_map:
+                            lora = lora_map.pop(id(om))
+                            lora.merge_in(merge_weight=1.0)
+                            # Detach references so GC can reclaim the dirty pages
+                            lora.org_module = []
+                            lora.org_forward = None
+                    gc.collect()
+                
+                # Handle any remaining LoRA modules outside the main blocks
+                for lora in lora_map.values():
+                    lora.merge_in(merge_weight=1.0)
+                    lora.org_module = []
+                    lora.org_forward = None
                 gc.collect()
             
-            # Step 3: Handle any remaining LoRA modules outside the main blocks
-            for lora in lora_map.values():
-                lora.merge_in(merge_weight=1.0)
-                lora.org_module = []
-                lora.org_forward = None
-            
-            # Call toolkit's quantize_model to finish the rest (additional layers, etc.)
+            # Step 2: Quantize using the toolkit's quantize_model which handles
+            # both torchao and quanto code paths correctly.
+            self.print_and_status_update("Quantizing transformer")
             quantize_model(self, transformer)
             flush()
             # Reattach Assistant LoRA to the new QLinear modules
