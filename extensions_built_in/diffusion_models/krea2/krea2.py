@@ -384,65 +384,63 @@ class Krea2Model(BaseModel):
 
         if self.model_config.quantize:
             import gc
-            
-            # Step 1: Merge assistant LoRA into each block one at a time to avoid
-            # a 26.3GB copy-on-write RAM spike from modifying memory-mapped weights all at once.
+            from toolkit.util.quantize import quantize as toolkit_quantize, get_qtype
+            from toolkit.dequantize import patch_dequantization_on_save
+            from optimum.quanto import freeze
+            from tqdm import tqdm
+
+            patch_dequantization_on_save(transformer)
+            qtype = get_qtype(self.model_config.qtype)
+
+            # Build a map: id(original_module) -> LoRA module for the assistant adapter
+            lora_map = {}
             if getattr(self, 'assistant_lora', None) is not None:
-                self.print_and_status_update("Merging assistant LoRA block-by-block to save RAM")
-                
-                # Build a map: id(original_module) -> LoRA module
-                lora_map = {}
                 for lora in self.assistant_lora.unet_loras:
                     if lora.org_module:
                         lora_map[id(lora.org_module[0])] = lora
-                
-                # Walk through transformer blocks and merge only the LoRAs in each block
-                all_blocks = []
-                for name in self.get_transformer_block_names():
-                    block_list = transformer
-                    for part in name.split('.'):
-                        block_list = getattr(block_list, part, None)
-                        if block_list is None:
-                            break
-                    if block_list is not None:
-                        all_blocks += list(block_list)
-                
-                from tqdm import tqdm
-                for block in tqdm(all_blocks, desc="Merging LoRA into blocks"):
+
+            # Collect transformer blocks
+            all_blocks = []
+            for name in self.get_transformer_block_names():
+                block_list = transformer
+                for part in name.split('.'):
+                    block_list = getattr(block_list, part, None)
+                    if block_list is None:
+                        break
+                if block_list is not None:
+                    all_blocks += list(block_list)
+
+            self.print_and_status_update(
+                f"Merge+quantize {len(all_blocks)} transformer blocks"
+            )
+
+            # Single-pass: merge LoRA delta AND quantize each block in one iteration.
+            # This avoids the 26GB copy-on-write RAM spike that occurs when all blocks
+            # are merged before any are quantized.  Per block: merge creates ~0.9GB of
+            # dirty pages, quantize immediately replaces them with compact weights,
+            # gc.collect() reclaims the old pages.  Peak RAM stays flat.
+            for block in tqdm(all_blocks, desc="Merge+Quantize"):
+                # 1) Merge assistant LoRA delta into this block's linears
+                if lora_map:
                     for om in block.modules():
                         if id(om) in lora_map:
                             lora = lora_map.pop(id(om))
                             lora.merge_in(merge_weight=1.0)
-                            # Detach references so GC can reclaim the dirty pages
-                            lora.org_module = []
-                            lora.org_forward = None
-                    gc.collect()
-                
-                # Handle any remaining LoRA modules outside the main blocks
-                for lora in lora_map.values():
-                    lora.merge_in(merge_weight=1.0)
-                    lora.org_module = []
-                    lora.org_forward = None
+
+                # 2) Quantize this block immediately
+                toolkit_quantize(block, weights=qtype)
+                freeze(block)
                 gc.collect()
-            
-            # Step 2: Quantize using the toolkit's quantize_model which handles
-            # both torchao and quanto code paths correctly.
-            self.print_and_status_update("Quantizing transformer")
-            quantize_model(self, transformer)
-            flush()
-            # Reattach Assistant LoRA to the new QLinear modules
-            if getattr(self, 'assistant_lora', None) is not None:
-                for lora in self.assistant_lora.unet_loras:
-                    name = lora.lora_name.replace('$$', '.').replace('transformer.', '')
-                    parts = name.split(".")
-                    parent_name = ".".join(parts[:-1])
-                    child_name = parts[-1]
-                    parent = transformer.get_submodule(parent_name)
-                    new_module = getattr(parent, child_name)
-                    lora.org_module = [new_module]
-                    lora.org_forward = new_module.forward
-                    new_module.forward = lora.forward
-                    
+
+            # Merge any remaining LoRA modules outside the main blocks
+            for lora in lora_map.values():
+                lora.merge_in(merge_weight=1.0)
+
+            # Quantize extras (norms, embeddings, etc.)
+            self.print_and_status_update(" - quantizing extras")
+            exclude_modules = self.get_quantization_exclude_modules() or []
+            toolkit_quantize(transformer, weights=qtype, exclude=exclude_modules)
+            freeze(transformer)
             flush()
 
         if (
