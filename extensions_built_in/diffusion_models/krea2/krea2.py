@@ -381,7 +381,26 @@ class Krea2Model(BaseModel):
 
         if self.model_config.quantize:
             self.print_and_status_update("Quantizing transformer")
+            # Detach Assistant LoRA so dirty fp16 weights can be garbage collected during quantization
+            if getattr(self, 'assistant_lora', None) is not None:
+                for lora in self.assistant_lora.unet_loras:
+                    lora.org_module = []
+            
             quantize_model(self, transformer)
+            
+            # Reattach Assistant LoRA to the new QLinear modules
+            if getattr(self, 'assistant_lora', None) is not None:
+                for lora in self.assistant_lora.unet_loras:
+                    name = lora.lora_name.replace('$$', '.').replace('transformer.', '')
+                    parts = name.split(".")
+                    parent_name = ".".join(parts[:-1])
+                    child_name = parts[-1]
+                    parent = transformer.get_submodule(parent_name)
+                    new_module = getattr(parent, child_name)
+                    lora.org_module = [new_module]
+                    lora.org_forward = new_module.forward
+                    new_module.forward = lora.forward
+                    
             flush()
 
         if (
