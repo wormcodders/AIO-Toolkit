@@ -347,6 +347,8 @@ def quantize_model(
             quantize(block, weights=quantization_type)
             freeze(block)
             block.to("cpu", non_blocking=True)
+            import gc; gc.collect()
+            import torch; torch.cuda.empty_cache()
 
         # todo, on extras find a universal way to quantize them on device and move them back to their original
         # device without having to move the transformer blocks to the device first
