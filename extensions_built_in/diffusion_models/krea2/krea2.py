@@ -516,6 +516,7 @@ class Krea2Model(BaseModel):
         self.processor = processor
         self.vl_processor = vl_processor
         self.model = transformer
+        self.unet = transformer
         self.pipeline = Krea2Pipeline(self)
         self.print_and_status_update("Model Loaded")
 
