@@ -425,6 +425,17 @@ class Krea2Model(BaseModel):
                     for om in block.modules():
                         if id(om) in lora_map:
                             lora = lora_map.pop(id(om))
+                            
+                            # BREAK THE MEMORY MAP LINK!
+                            # safetensors loads weights as a memory map. If merge_in modifies them in-place,
+                            # the OS marks those pages as "dirty" and they can never be evicted until the
+                            # entire 26GB file is unmapped. By cloning into a new RAM tensor first, we 
+                            # leave the memory map clean (evictable) and only consume local RAM that GC can free.
+                            if hasattr(om, 'weight') and isinstance(om.weight, torch.nn.Parameter):
+                                om.weight = torch.nn.Parameter(om.weight.clone())
+                            if hasattr(om, 'bias') and isinstance(om.bias, torch.nn.Parameter):
+                                om.bias = torch.nn.Parameter(om.bias.clone())
+                                
                             lora.merge_in(merge_weight=1.0)
 
                 # 2) Quantize this block immediately
@@ -434,6 +445,11 @@ class Krea2Model(BaseModel):
 
             # Merge any remaining LoRA modules outside the main blocks
             for lora in lora_map.values():
+                for om in lora.org_module:
+                    if hasattr(om, 'weight') and isinstance(om.weight, torch.nn.Parameter):
+                        om.weight = torch.nn.Parameter(om.weight.clone())
+                    if hasattr(om, 'bias') and isinstance(om.bias, torch.nn.Parameter):
+                        om.bias = torch.nn.Parameter(om.bias.clone())
                 lora.merge_in(merge_weight=1.0)
 
             # Quantize extras (norms, embeddings, etc.)
