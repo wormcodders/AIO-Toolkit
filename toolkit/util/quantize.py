@@ -343,10 +343,8 @@ def quantize_model(
             f" - quantizing {len(all_blocks)} transformer blocks"
         )
         for block in tqdm(all_blocks):
-            block.to(base_model.device_torch, dtype=base_model.torch_dtype, non_blocking=True)
             quantize(block, weights=quantization_type)
             freeze(block)
-            block.to("cpu", non_blocking=True)
             import gc; gc.collect()
             import torch; torch.cuda.empty_cache()
 
