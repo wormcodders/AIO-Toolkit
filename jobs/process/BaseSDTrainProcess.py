@@ -736,21 +736,34 @@ class BaseSDTrainProcess(BaseTrainProcess):
         self.accelerator.even_batches=False
         
         # # prepare all the models stuff for accelerator (hopefully we dont miss any)
-        self.sd.vae = self.accelerator.prepare(self.sd.vae)
+        # Only prepare models that actually have trainable parameters.
+        # Preparing a frozen model forces it to cuda:0, which breaks layer offloading and manual device placement.
+        if self.sd.vae is not None and any(p.requires_grad for p in self.sd.vae.parameters()):
+            self.sd.vae = self.accelerator.prepare(self.sd.vae)
+            
         if self.sd.unet is not None:
-            self.sd.unet = self.accelerator.prepare(self.sd.unet)
-            # todo always tdo it?
-            self.modules_being_trained.append(self.sd.unet)
+            if any(p.requires_grad for p in self.sd.unet.parameters()):
+                self.sd.unet = self.accelerator.prepare(self.sd.unet)
+                self.modules_being_trained.append(self.sd.unet)
         if self.sd.text_encoder is not None and self.train_config.train_text_encoder:
             if isinstance(self.sd.text_encoder, list):
-                self.sd.text_encoder = [self.accelerator.prepare(model) for model in self.sd.text_encoder]
-                self.modules_being_trained.extend(self.sd.text_encoder)
+                new_te = []
+                for model in self.sd.text_encoder:
+                    if any(p.requires_grad for p in model.parameters()):
+                        new_te.append(self.accelerator.prepare(model))
+                        self.modules_being_trained.append(model)
+                    else:
+                        new_te.append(model)
+                self.sd.text_encoder = new_te
             else:
-                self.sd.text_encoder = self.accelerator.prepare(self.sd.text_encoder)
-                self.modules_being_trained.append(self.sd.text_encoder)
+                if any(p.requires_grad for p in self.sd.text_encoder.parameters()):
+                    self.sd.text_encoder = self.accelerator.prepare(self.sd.text_encoder)
+                    self.modules_being_trained.append(self.sd.text_encoder)
+                    
         if self.sd.refiner_unet is not None and self.train_config.train_refiner:
-            self.sd.refiner_unet = self.accelerator.prepare(self.sd.refiner_unet)
-            self.modules_being_trained.append(self.sd.refiner_unet)
+            if any(p.requires_grad for p in self.sd.refiner_unet.parameters()):
+                self.sd.refiner_unet = self.accelerator.prepare(self.sd.refiner_unet)
+                self.modules_being_trained.append(self.sd.refiner_unet)
         # todo, do we need to do the network or will "unet" get it?
         if self.sd.network is not None:
             self.sd.network = self.accelerator.prepare(self.sd.network)
