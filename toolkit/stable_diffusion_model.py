@@ -2131,7 +2131,9 @@ class StableDiffusion:
                 else:
                     noise_pred = noise_pred
             else:
-                if self.unet.device != self.device_torch:
+                if getattr(self.model_config, 'layer_offloading', False):
+                    pass # MemoryManager will handle it
+                elif self.unet.device != self.device_torch:
                     try:
                         self.unet.to(self.device_torch)
                     except Exception as e:
