@@ -370,6 +370,12 @@ class Krea2Model(BaseModel):
         self.invert_assistant_lora = True
 
     def load_model(self):
+        import os
+        import time
+        if int(os.environ.get("LOCAL_RANK", "0")) == 1:
+            self.print_and_status_update("DDP Local Rank 1: Staggering Model load to save System RAM (8 min delay)...")
+            time.sleep(480)
+
         dtype = self.torch_dtype
         self.print_and_status_update("Loading Krea 2 model")
 
@@ -480,12 +486,6 @@ class Krea2Model(BaseModel):
         else:
             transformer.to(self.device_torch, dtype=dtype)
         flush()
-
-        import os
-        import time
-        if int(os.environ.get("LOCAL_RANK", "0")) == 1:
-            self.print_and_status_update("DDP Local Rank 1: Staggering Text Encoder load to save System RAM (8 min delay)...")
-            time.sleep(480)
 
         tokenizer, processor, vl_processor, text_encoder = self._load_text_encoder()
         if self.model_config.quantize_te:
