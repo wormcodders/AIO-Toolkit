@@ -484,7 +484,6 @@ class Krea2Model(BaseModel):
         tokenizer, processor, vl_processor, text_encoder = self._load_text_encoder()
         if self.model_config.quantize_te:
             self.print_and_status_update("Quantizing text encoder")
-            text_encoder.to(self.device_torch)
             quantize(text_encoder, weights=get_qtype(self.model_config.qtype_te))
             freeze(text_encoder)
             flush()
