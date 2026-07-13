@@ -484,6 +484,7 @@ class Krea2Model(BaseModel):
         tokenizer, processor, vl_processor, text_encoder = self._load_text_encoder()
         if self.model_config.quantize_te:
             self.print_and_status_update("Quantizing text encoder")
+            text_encoder.to(self.te_device_torch)
             quantize(text_encoder, weights=get_qtype(self.model_config.qtype_te))
             freeze(text_encoder)
             flush()
@@ -501,7 +502,7 @@ class Krea2Model(BaseModel):
             self.print_and_status_update("Moving text encoder to CPU")
             text_encoder.to("cpu")
         else:
-            text_encoder.to(self.device_torch)
+            text_encoder.to(self.te_device_torch)
         flush()
 
         vae = self._load_vae()
@@ -753,7 +754,7 @@ class Krea2Model(BaseModel):
             prompt = [prompt]
 
         if self.text_encoder.device == torch.device("cpu"):
-            self.text_encoder.to(self.device_torch)
+            self.text_encoder.to(self.te_device_torch)
 
         # Normalize control images to a per-prompt list (List[List[Tensor]]).
         # They arrive as a (B, C, H, W) batch tensor (control_tensor), a list of
