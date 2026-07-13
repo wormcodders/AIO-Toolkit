@@ -484,8 +484,8 @@ class Krea2Model(BaseModel):
         import os
         import time
         if int(os.environ.get("LOCAL_RANK", "0")) == 1:
-            self.print_and_status_update("DDP Local Rank 1: Staggering Text Encoder load to save System RAM (5 min delay)...")
-            time.sleep(300)
+            self.print_and_status_update("DDP Local Rank 1: Staggering Text Encoder load to save System RAM (8 min delay)...")
+            time.sleep(480)
 
         tokenizer, processor, vl_processor, text_encoder = self._load_text_encoder()
         if self.model_config.quantize_te:
