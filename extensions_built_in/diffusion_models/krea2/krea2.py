@@ -373,8 +373,10 @@ class Krea2Model(BaseModel):
         import os
         import time
         if int(os.environ.get("LOCAL_RANK", "0")) == 1:
-            self.print_and_status_update("DDP Local Rank 1: Staggering Model load to save System RAM (8 min delay)...")
-            time.sleep(480)
+            config_str = str(self.model_config.__dict__).lower()
+            delay = 180 if "z-turbo" in config_str or "z_turbo" in config_str else 480
+            self.print_and_status_update(f"DDP Local Rank 1: Staggering Model load to save System RAM ({delay//60} min delay)...")
+            time.sleep(delay)
 
         dtype = self.torch_dtype
         self.print_and_status_update("Loading Krea 2 model")
