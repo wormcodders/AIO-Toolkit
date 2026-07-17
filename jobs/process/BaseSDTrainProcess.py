@@ -2464,6 +2464,14 @@ class BaseSDTrainProcess(BaseTrainProcess):
                     did_oom = True
                 else:
                     raise  # not an OOM; surface real errors
+            
+            # Synchronize the OOM flag across all GPUs to prevent NCCL deadlocks
+            if self.accelerator.num_processes > 1:
+                import torch.distributed as dist
+                if dist.is_initialized():
+                    did_oom_tensor = torch.tensor([1 if did_oom else 0], dtype=torch.int32, device=self.accelerator.device)
+                    dist.all_reduce(did_oom_tensor, op=dist.ReduceOp.MAX)
+                    did_oom = did_oom_tensor.item() == 1
             if did_oom:
                 self.num_consecutive_oom += 1
                 if self.num_consecutive_oom > 3:
@@ -2560,6 +2568,10 @@ class BaseSDTrainProcess(BaseTrainProcess):
                         self.ensure_params_requires_grad()
                         if self.progress_bar is not None:
                             self.progress_bar.unpause()
+                    
+                    # Ensure all GPUs wait until the main GPU finishes saving/sampling before moving to the next batch
+                    if is_sample_step or is_save_step:
+                        self.accelerator.wait_for_everyone()
 
                     if self.logging_config.log_every and self.step_num % self.logging_config.log_every == 0:
                         if self.progress_bar is not None:

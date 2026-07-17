@@ -7,7 +7,10 @@ global_accelerator = None
 def get_accelerator() -> Accelerator:
     global global_accelerator
     if global_accelerator is None:
-        global_accelerator = Accelerator()
+        from accelerate import InitProcessGroupKwargs
+        from datetime import timedelta
+        kwargs = InitProcessGroupKwargs(timeout=timedelta(minutes=120))
+        global_accelerator = Accelerator(kwargs_handlers=[kwargs])
     return global_accelerator
 
 def unwrap_model(model):
